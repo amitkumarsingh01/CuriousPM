@@ -5,6 +5,7 @@ import requests
 import moviepy.editor as mp
 from gtts import gTTS
 import whisper
+import tempfile
 
 def main():
     st.set_page_config(layout="wide")
@@ -17,10 +18,11 @@ def main():
         video_file = st.file_uploader("Upload a video file", type=["mp4", "mov", "avi"])
 
         if video_file is not None:
-            # Save uploaded file in memory
-            video_bytes = video_file.read()
-            video_buffer = io.BytesIO(video_bytes)
-            st.video(video_buffer)
+            # Save uploaded file to a temporary file for processing
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_video_file:
+                temp_video_file.write(video_file.read())
+                temp_video_file_path = temp_video_file.name
+            st.video(temp_video_file_path)
 
             # Add GitHub and Demo buttons below the video upload
             st.markdown("[![GitHub](https://img.shields.io/badge/GitHub-Repository-blue)](https://github.com/amitkumarsingh01/CuriousPM)")
@@ -32,19 +34,25 @@ def main():
             audio_col1, audio_col2 = st.columns(2)
 
             # Process video and extract audio using moviepy
-            video_buffer.seek(0)
-            video_clip = mp.VideoFileClip(video_buffer)
+            video_clip = mp.VideoFileClip(temp_video_file_path)
             audio_clip = video_clip.audio
             audio_buffer = io.BytesIO()
-            audio_clip.write_audiofile(audio_buffer, codec='mp3')
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio_file:
+                audio_clip.write_audiofile(temp_audio_file.name, codec='mp3')
+                temp_audio_file.seek(0)
+                audio_buffer.write(temp_audio_file.read())
+
             audio_buffer.seek(0)
 
+            # Display and download the original audio
             audio_col1.audio(audio_buffer, format='audio/mp3')
             audio_col1.download_button("Download Original Audio", audio_buffer, file_name="audio.mp3")
 
             # Transcription using Whisper
             model = whisper.load_model("base")
-            result = model.transcribe(audio_buffer)
+            audio_buffer.seek(0)
+            result = model.transcribe(temp_audio_file.name)
             transcribed_text = result["text"]
 
             text_col1, text_col2 = st.columns(2)
@@ -73,29 +81,43 @@ def main():
                     tts.write_to_fp(corrected_audio_buffer)
                     corrected_audio_buffer.seek(0)
 
-                    original_duration = mp.AudioFileClip(audio_buffer).duration
+                    # Sync corrected audio to match original duration
+                    original_duration = mp.AudioFileClip(temp_audio_file.name).duration
                     corrected_audio_clip = mp.AudioFileClip(corrected_audio_buffer)
-                    adjusted_audio = corrected_audio_clip.fx(mp.vfx.speedx, corrected_audio_clip.duration / original_duration)
+                    adjusted_audio_clip = corrected_audio_clip.fx(mp.vfx.speedx, corrected_audio_clip.duration / original_duration)
+                    
                     adjusted_audio_buffer = io.BytesIO()
-                    adjusted_audio.write_audiofile(adjusted_audio_buffer)
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as adjusted_audio_temp_file:
+                        adjusted_audio_clip.write_audiofile(adjusted_audio_temp_file.name)
+                        adjusted_audio_temp_file.seek(0)
+                        adjusted_audio_buffer.write(adjusted_audio_temp_file.read())
                     adjusted_audio_buffer.seek(0)
 
                     audio_col2.audio(adjusted_audio_buffer, format='audio/mp3')
                     audio_col2.download_button("Download Adjusted Audio", adjusted_audio_buffer, file_name="adjusted_audio.mp3")
 
-                    # Final video processing
+                    # Final video processing with the corrected audio
                     video_col1, video_col2 = st.columns(2)
                     video_no_audio_clip = video_clip.without_audio()
+
+                    # Save video without audio to temporary file
                     video_no_audio_buffer = io.BytesIO()
-                    video_no_audio_clip.write_videofile(video_no_audio_buffer, codec='mp4')
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_no_audio_file:
+                        video_no_audio_clip.write_videofile(temp_no_audio_file.name, codec='libx264')
+                        temp_no_audio_file.seek(0)
+                        video_no_audio_buffer.write(temp_no_audio_file.read())
                     video_no_audio_buffer.seek(0)
 
                     video_col1.video(video_no_audio_buffer)
                     video_col1.download_button("Download Video without Audio", video_no_audio_buffer, file_name="video_no_audio.mp4")
 
+                    # Merge corrected audio with the video
                     final_video_clip = video_no_audio_clip.set_audio(corrected_audio_clip)
                     final_video_buffer = io.BytesIO()
-                    final_video_clip.write_videofile(final_video_buffer, codec='mp4')
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_final_video_file:
+                        final_video_clip.write_videofile(temp_final_video_file.name, codec='libx264')
+                        temp_final_video_file.seek(0)
+                        final_video_buffer.write(temp_final_video_file.read())
                     final_video_buffer.seek(0)
 
                     video_col2.video(final_video_buffer)
